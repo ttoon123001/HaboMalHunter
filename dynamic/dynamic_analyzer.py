@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*
 """
 Tencent is pleased to support the open source community by making HaboMalHunter available.
 Copyright (C) 2017 THL A29 Limited, a Tencent company. All rights reserved.
@@ -127,6 +128,32 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			if -1 != quote_pos:
 				func_name = ctx[0:quote_pos].strip()
 				r_quote_pos = ctx.rfind(")")
+				if -1 != r_quote_pos:
+					func_argstr = ctx[quote_pos+len("("):r_quote_pos]
+					func_argstr = "[%s]"%(func_argstr)
+		if -1 != unfi_pos:
+			func_ret = "unfinished"
+			quote_pos = ctx.find("(")
+			if -1 != quote_pos:
+				func_name = ctx[0:quote_pos].strip()
+				r_quote_pos = ctx.rfind("<unfinished")
+				if -1 != r_quote_pos:
+					func_argstr = ctx[quote_pos+len("("):r_quote_pos]
+					func_argstr = "[%s]"%(func_argstr)
+		return (func_name,func_argstr,func_ret)
+
+	def parse_strace_func(self,ctx):
+		func_name = ""
+		func_argstr = ""
+		func_ret = -1
+		eq_pos = ctx.find("=")
+		unfi_pos = ctx.find("unfinished")
+		if -1 != eq_pos:
+			func_ret = ctx[eq_pos+len("="):].strip()
+			quote_pos = ctx.find("(")
+			if -1 != quote_pos:
+				func_name = ctx[0:quote_pos].strip()
+				r_quote_pos = ctx.find(")")
 				if -1 != r_quote_pos:
 					func_argstr = ctx[quote_pos+len("("):r_quote_pos]
 					func_argstr = "[%s]"%(func_argstr)
@@ -274,6 +301,57 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 								pass
 		return ret
 
+	def handle_strace(self, output_list):
+		ret = []
+		tot_sz = len(output_list)
+		cnt=0
+		for ind in range(tot_sz):
+			if ind > self.cfg.trace_limit:
+				self.log.info("trace events are too much. [%d/%d]"%(ind,self.cfg.trace_limit))
+				break
+			line = output_list[ind]
+			parts = line.split()
+			if len(parts)>=3:
+				pid = parts[0]
+				str_ts = parts[1]
+				ctx = "".join(parts[2:])
+				if self.is_func_called(ctx):
+					(func_name,func_argstr,func_ret) = self.parse_strace_func(ctx)
+					if "unfinished" == func_ret:
+						#self.log.info("func_name: %s , unfinished.", func_name)
+						for next_ind in range(ind+1, tot_sz):
+							next_line = output_list[next_ind]
+							#self.log.debug("next_line: #%s#, next_ind", next_line)
+							is_resumed = self.is_func_resumed(next_line)
+							is_func_by_name = self.check_func_by_name(next_line,func_name)
+							#self.log.debug("is_resumed: %r , is_func_by_name: %r",is_resumed, is_func_by_name)
+							if is_resumed and is_func_by_name:
+								func_ret = self.get_func_ret(next_line)
+								#self.log.info("unfinished func: %s, ret:%s", func_name, func_ret)
+								break
+
+					if len(func_name):
+						if func_name.startswith("SYS_"): # syscall
+							#self.log.debug("syscall %s has not been support",func_name)
+							pass
+						else:
+							ind = self.search_ltrace_tpl(func_name)
+							#self.log.debug("find func_name: %s, ind: %d",func_name, ind)
+							if -1!=ind:
+								tpl = self.info["ltrace_tpl"][ind]
+								ts = self.parse_time(str_ts)
+								str_src = "PID=%s"%(pid)
+								str_dst = "%s ret=%s, args=%s "%(func_name,func_ret,func_argstr)
+								node = {"ts":ts, 'src':str_src, 'dst':str_dst}
+								node["ID"] = tpl["ID"]
+								node["ID_NOTE"] = tpl["ID_NOTE"]
+								#self.log.info("func_name: %s will be shown", func_name)
+								ret.append(node)
+							else:
+								#self.log.info("func_name: %s is not in ltrace tpl", func_name)
+								pass
+		return ret
+
 	def parse_ltrace(self):
 		log_file = self.info["ltrace_log_path"]
 		self.log.info("parsing ltrace data %s",log_file)
@@ -285,6 +363,13 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 
 	def parse_strace(self):
 		self.log.info("please use sysdig instead of strace")
+		# log_file = self.info["strace_log_path"]
+		# self.log.info("parsing strace data %s", log_file)
+		# f = open(log_file, "rb")
+		# output_list = f.readlines()
+		# f.close()
+		# data_list = self.handle_strace(output_list)
+		# self.action_info.extend(data_list)
 
 	def merge_Import(self):
 		static_log_file = os.path.join(self.cfg.file_log_dir,self.info["hash_md5"]+".static")
@@ -522,33 +607,32 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		return node
 
 	def handle_dns(self, output_list):
-		ret=[]
+		ret=[]#'daisy.ubuntu.com',
+		wlist = []
+				 # 'detectportal.firefox.com',
+				 # 'productsearch.ubuntu.com.localdomain',
+				 # 'current.cvd.clamav.net']
 		for line in output_list:
-			parts_dir = line.split("->")
-			if len(parts_dir) >=2:
-				parts_src = parts_dir[0].split()
-				if len(parts_src)>=3:
-					ts_info = parts_src[1].strip()
-					src_info = parts_src[2].strip()
-					dest_info = parts_dir[1].strip()
-					ts=self.parse_time(ts_info)
-					node = {"ts":ts, "src":src_info, "dst":dest_info}
-					if self.is_pure_protocal(dest_info,"DNS"):
-						if -1 == dest_info.find("response"):
-							node["ID"] = metrics.D_ID_NET_DNS_QUERY
-							node["ID_NOTE"] = metrics.D_ID_NET_DNS_QUERY_NOTE
-						else:
-							node["ID"] = metrics.D_ID_NET_DNS_RESPONSE
-							node["ID_NOTE"] = metrics.D_ID_NET_DNS_RESPONSE_NOTE
-						node = self.combain_src_dest(node)
-						ret.append(node)
+			parts_src = line.split()
+			if parts_src[5] not in wlist:
+				ts = self.parse_time(parts_src[3])
+				node = {"ts": ts, "src": parts_src[6], "dst": parts_src[5]}
+				if '0' == parts_src[6]:
+					node["ID"] = metrics.D_ID_NET_DNS_QUERY
+					node["ID_NOTE"] = metrics.D_ID_NET_DNS_QUERY_NOTE
+				else:
+					node["ID"] = metrics.D_ID_NET_DNS_RESPONSE
+					node["ID_NOTE"] = metrics.D_ID_NET_DNS_RESPONSE_NOTE
+				ret.append(node)
 		return ret
 
 	def dns_info(self):
-		cmd = ['/usr/bin/tshark', '-n', '-ta', '-r'+ self.info["tcpdump_log_path"], '-2', '-R', 'dns.qry.name']
+		#cmd = ['/usr/bin/tshark', '-n', '-ta', '-r'+ self.info["tcpdump_log_path"], '-2', '-R', 'dns.qry.name']
+		cmd = ['/usr/bin/tshark', '-n', '-ta', '-Y', 'dns', '-r' + self.info["tcpdump_log_path"], '-T', 'fields', '-e', 'frame.time', '-e', 'dns.qry.name', '-e', 'dns.flags.response']
 		self.log.info("dns cmd: %s",str(cmd))
 		output = self.check_output_safe(cmd)
 		output_list = self.normalise(output.splitlines())
+		self.log.info("Capture DNS packet number %d ", len(output_list))
 		data_list = self.handle_dns(output_list)
 		self.action_info.extend(data_list)
 
@@ -608,16 +692,16 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 	def handle_tcp(self, output_list):
 		ret=[]
 		for line in output_list:
-			parts_dir = line.split("->")
+			parts_dir = line.split("→") or line.split("->")
 			if len(parts_dir) >=2:
 				parts_src = parts_dir[0].split()
 				if len(parts_src)>=3:
 					ts_info = parts_src[1].strip()
 					src_info = parts_src[2].strip()
-					dest_info = parts_dir[1].strip()
+					dest_info = parts_dir[1].split()[0]
 					ts=self.parse_time(ts_info)
 					node = {"ts":ts, "src":src_info, "dst":dest_info}
-					if self.is_pure_protocal(dest_info,"TCP"):
+					if self.is_pure_protocal(parts_dir[1].strip(),"TCP"):  #dest_info parts_dir[1]
 						node["ID"] = metrics.D_ID_NET_TCP
 						node["ID_NOTE"] = metrics.D_ID_NET_TCP_NOTE
 						node = self.combain_src_dest(node)
@@ -628,6 +712,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		cmd = ['/usr/bin/tshark', '-n', '-ta', '-r'+ self.info["tcpdump_log_path"], 'tcp']
 		output = self.check_output_safe(cmd)
 		output_list = self.normalise(output.splitlines())
+		self.log.info("Capture TCP packet number %d ", len(output_list))
 		data_list = self.handle_tcp(output_list)
 		#self.log.info("tcp: %s",str(data_list))
 		self.action_info.extend(data_list)
@@ -1080,7 +1165,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		self.vol_pstree()
 
 	def vol_pstree(self):
-		cmd = ['/usr/bin/vol.py', '-f%s'%(self.cfg.mem_dump_path), '--profile=%s'%(self.cfg.vol_profile_name), 'linux_pstree']
+		cmd = ['/usr/local/bin/vol.py', '-f%s'%(self.cfg.mem_dump_path), '--profile=%s'%(self.cfg.vol_profile_name), 'linux_pstree']
 		(output, ret) = self.check_output_ret_safe(cmd)
 		self.log.info("vol_pstree:%s",output)
 		is_ok = (-1==output.find("No suitable")) # No suitable can not be found
@@ -1090,7 +1175,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			self.log.info("mem dump error, please try again")
 
 	def vol_bash(self):
-		cmd = ['/usr/bin/vol.py', '-f%s'%(self.cfg.mem_dump_path), '--profile=%s'%(self.cfg.vol_profile_name), 'linux_bash']
+		cmd = ['/usr/local/bin/vol.py', '-f%s'%(self.cfg.mem_dump_path), '--profile=%s'%(self.cfg.vol_profile_name), 'linux_bash']
 		(output, ret) = self.check_output_ret_safe(cmd)
 		self.log.info("vol_bash:%s",output)
 		is_ok = (-1==output.find("No suitable")) # No suitable can not be found
@@ -1270,6 +1355,8 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		if "auto" == self.cfg.trace_type:
 			MagicLiteral = self.info["file"]
 			self.log.debug("MagicLiteral: %s",MagicLiteral)
+			self.cfg.decided_trace_type = "strace"
+
 			if -1!=MagicLiteral.find("statically"):
 				self.cfg.decided_trace_type = "strace"
 			elif -1!=MagicLiteral.find("dynamically"):
@@ -1337,7 +1424,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		target_pid = self.info["target_pid"]
 		log_file = os.path.join(self.cfg.file_log_dir,self.info["hash_md5"]+".strace")
 		self.info["strace_log_path"] = log_file
-		self.p_strace = subprocess.Popen(["/usr/bin/strace", "-f", "-tt", "-y", "-o"+self.info["strace_log_path"], "-p"+str(self.info["target_pid"])], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+		self.p_strace = subprocess.Popen(["/usr/bin/strace", "-f", "-s 32767", "-tt", "-y", "-o"+self.info["strace_log_path"], "-p"+str(self.info["target_pid"])], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 		self.log.info("strace starts, logfile:%s",self.info["strace_log_path"])
 
 	def stop_strace(self):

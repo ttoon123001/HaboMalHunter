@@ -137,7 +137,7 @@ class StaticAnalyzer(base.BaseAnalyzer):
 		file_path = self.cfg.target_abs_path
 		yara_info = []
 		if os.path.exists(self.cfg.yara_rules_data):
-			rules = yara.load(self.cfg.yara_rules_data)
+			rules = yara.load_rules(self.cfg.yara_rules_data)
 			matches = rules.match(file_path)
 			self.log.info(matches)
 			if len(matches):

@@ -31,7 +31,6 @@ def main(argc, argv):
 	ifile = argv[1]
 	ofile = "yara.bin"
 	rules = yara.compile(ifile)
-	rules.save(ofile)
 	print "%s has been generated."%(ofile)
 	return 0
 if "__main__" == __name__ :

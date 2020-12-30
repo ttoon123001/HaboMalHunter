@@ -67,9 +67,9 @@ int main(int argc, char *argv[])
                 inet_ntop(AF_INET6, &(((struct sockaddr_in6 *)(ptr->ai_addr))->sin6_addr), buff, sizeof(buff));
                 printf("\tIPv6 address %s\n", buff);
                 break;
-            case AF_NETBIOS:
-                printf("AF_NETBIOS (NetBIOS)\n");
-                break;
+//            case AF_NETBIOS:
+//                printf("AF_NETBIOS (NetBIOS)\n");
+//                break;
             default:
                 printf("Other %d\n", ptr->ai_family);
                 break;

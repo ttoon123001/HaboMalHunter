@@ -60,7 +60,7 @@ import metrics
 import base
 
 TIME_LIMIT_DYNAMIC_DEF=60 # 60 seconds for dynamic analysis timeout
-BASE_HOME='/root/'
+BASE_HOME='/usr/local/app/HaboMalHunter/'
 SECTION_DEF = 'main'
 CONFIG_PATH_DEF='config.ini'
 ENV_PREFIX='HABO_'
