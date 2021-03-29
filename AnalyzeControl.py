@@ -529,7 +529,7 @@ def pick_dynamic_log(cfg):
 	"""
 	Pick the largest in file size
 	"""
-	#main_dynamic = os.path.join(cfg.file_log_dir,cfg.main_target_md5+".dynamic")
+	main_dynamic = os.path.join(cfg.file_log_dir,cfg.main_target_md5+".dynamic")
 	main_static = os.path.join(cfg.file_log_dir,cfg.main_target_md5+".static")
 	log_dir = cfg.file_log_dir
 	if os.path.exists(main_static):
@@ -559,7 +559,7 @@ def pick_dynamic_log(cfg):
 			shutil.copyfile(src_file, dest_file)
 		log.info("main dynamic log updated %s", main_dynamic)
 
-def generate_output_log(cfg, do_static, do_dynamic):
+def generate_output_log(cfg, do_static, do_dynamic, do_trace):
 	"""
 	generate output log as:
 	output.static
@@ -577,14 +577,24 @@ def generate_output_log(cfg, do_static, do_dynamic):
 		if os.path.exists(main_dynamic):
 			shutil.copyfile(main_dynamic, output_dynamic)
 		log.info("output dynamic logs %s have been generated", output_dynamic)
+	if do_trace:
+		main_strace = os.path.join(cfg.file_log_dir,cfg.main_target_md5+".strace")
+		output_strace = os.path.join(cfg.file_log_dir, "output.strace")
+		main_ltrace = os.path.join(cfg.file_log_dir,cfg.main_target_md5+".ltrace")
+		output_ltrace = os.path.join(cfg.file_log_dir, "output.ltrace")
+		if os.path.exists(main_strace):
+			shutil.copyfile(main_strace, output_strace)
+		elif os.path.exists(main_ltrace):
+			shutil.copyfile(main_ltrace, output_ltrace)
+		log.info("output dynamic logs %s have been generated", output_dynamic)
 
 def generate_html(cfg):
 	cwd = os.getcwd()
-	os.chdir('/root/util/log_to_html/')
+	os.chdir('/usr/local/app/HaboMalHunter/util/log_to_html/')
 	output_dynamic = os.path.join(cfg.file_log_dir, cfg.dynamic_log)
-	cmd_log_line = ["/usr/bin/python","/root/util/log_to_html/Linux_Trim.py",output_dynamic]
+	cmd_log_line = ["/usr/bin/python","/usr/local/app/HaboMalHunter/util/log_to_html/Linux_Trim.py",output_dynamic]
 	subprocess.call(cmd_log_line)
-	cmd_html_line = ["/usr/bin/python","/root/util/log_to_html/log_to_html.py",cfg.file_log_dir,"-elf"]
+	cmd_html_line = ["/usr/bin/python","/usr/local/app/HaboMalHunter/util/log_to_html/log_to_html.py",cfg.file_log_dir,"-elf"]
 	subprocess.call(cmd_html_line)
 	os.chdir(cwd)
 
@@ -598,6 +608,24 @@ def compress_log(cfg):
 	f_name = shutil.make_archive("/tmp/output","zip",cfg.file_log_dir)
 	shutil.move(f_name,dest)
 	log.info("log files were packed into %s",cfg.file_log_dir)
+
+def clear_log(cfg):
+	#self.info["hash_md5"]+xxx
+	outfile_dy = cfg.main_target_md5 + ".dynamic"
+	outfile_st = cfg.main_target_md5 + ".static"
+	if os.path.isfile(outfile_dy):
+		try:
+			os.remove(outfile_dy)
+		except OSError as e:
+			log.info("remove file Probably not %s", outfile_dy)
+	elif os.path.isfile(outfile_st):
+		try:
+			os.remove(outfile_st)
+		except OSError as e:
+			log.info("remove file Probably not %s", outfile_st)
+
+
+	pass
 	
 def init_localtime():
 	"""
@@ -638,9 +666,9 @@ def main(argc, argv):
 		# combine static log
 		#combine_static_log(cfg)
 		combine_static_perfile(cfg)
-		generate_output_log(cfg, True, False)
+		generate_output_log(cfg, True, False, False)
 		# generate static tag file
-		generate_tag_file(cfg,True, False)
+		# generate_tag_file(cfg,True, False)
 		# At this time, the program outside VM will pick static log file
 		# pick one dynamic log
 		#pick_dynamic_log(cfg)
@@ -652,14 +680,14 @@ def main(argc, argv):
 			#do both, dynamic needs static info
 			do_work(cfg, True, True)
 			generate_main_dyn_log(cfg, target_md5)
-			generate_output_log(cfg, False, True)
+			generate_output_log(cfg, False, True, False)
 		else:
 			log.error("there is no elf to load for dynamic analysis. please check package.")
 		# clean
 		if not cfg.is_inplace:
 			clean_temp(cfg.temp_list)
 		# generate dynamic tag file
-		generate_tag_file(cfg,False, True)
+		# generate_tag_file(cfg,False, True)
 		# generate html file
 		generate_html(cfg)
 		# zip all log file
@@ -668,18 +696,20 @@ def main(argc, argv):
 		# do static first
 		do_work(cfg, True, False)
 		# no need to combain log since single mode
-		generate_output_log(cfg, True, False)
+		generate_output_log(cfg, True, False, False)
 		# generate static tag file
-		generate_tag_file(cfg, True, False)
+		# generate_tag_file(cfg, True, False)
 
 		# do both, dynamic needs static info
 		do_work(cfg, True, True)
-		generate_output_log(cfg, False, True)
+		generate_output_log(cfg, False, True, True)
 		
 		# generate dynamic tag file
-		generate_tag_file(cfg,False, True)
+		# generate_tag_file(cfg,False, True)
 		# generate html file
 		generate_html(cfg)
+		#clear other log
+		clear_log(cfg)
 		# zip all log file
 		compress_log(cfg)
 	return 0

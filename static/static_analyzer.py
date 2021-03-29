@@ -501,15 +501,16 @@ class StaticAnalyzer(base.BaseAnalyzer):
 			else:
 				self.log.error("section %s hash error: %s"%(name,output))
 		# generate mdb
-		if 0!=len(sections_file_list):
-			cmd = ['/usr/bin/sigtool','--mdb']
-			cmd.extend(sections_file_list)
-			#self.log.info("sigtool: %s",str(cmd))
-			(output,ret) = self.check_output_ret_safe(cmd)
-			if 0==ret:
-				mdb_file_path = self.info["hash_md5"]+".mdb"
-				self.write_file(mdb_file_path,output)
-				self.info["mdb_info"] = self.generate_mdb(self.normalise(output.splitlines()))
+		# if 0!=len(sections_file_list):
+		# 	cmd = ['/usr/bin/sigtool','--mdb']
+		# 	cmd.extend(sections_file_list)
+		# 	#self.log.info("sigtool: %s",str(cmd))
+		# 	(output,ret) = self.check_output_ret_safe(cmd)
+		# 	if 0==ret:
+		# 		mdb_file_path = self.info["hash_md5"]+".mdb"
+		# 		self.write_file(mdb_file_path,output)
+		# 		self.info["mdb_info"] = self.generate_mdb(self.normalise(output.splitlines()))
+
 			#remove section files, keep file for debug
 			#for f in sections_file_list:
 			#	os.remove(f)
@@ -570,7 +571,7 @@ class StaticAnalyzer(base.BaseAnalyzer):
 		else:
 			self.log.error("The output format %s has not been supported",fmt)
 	def output_json(self):
-		self.output_json_filetype()
+		#self.output_json_filetype()
 		self.output_json_static()
 		self.output_json_strings()
 

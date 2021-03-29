@@ -201,8 +201,8 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		ltrace_tpl.append(node)
 		node = {'name':'accept','ID': metrics.D_ID_LIBC_accept, 'ID_NOTE':metrics.D_ID_LIBC_accept_NOTE}
 		ltrace_tpl.append(node)
-		node = {'name':'fork','ID': metrics.D_ID_LIBC_fork, 'ID_NOTE':metrics.D_ID_LIBC_fork_NOTE}
-		ltrace_tpl.append(node)
+		# node = {'name':'fork','ID': metrics.D_ID_LIBC_fork, 'ID_NOTE':metrics.D_ID_LIBC_fork_NOTE}
+		# ltrace_tpl.append(node)
 		node = {'name':'wait','ID': metrics.D_ID_LIBC_wait, 'ID_NOTE':metrics.D_ID_LIBC_wait_NOTE}
 		ltrace_tpl.append(node)
 		node = {'name':'system','ID': metrics.D_ID_LIBC_system, 'ID_NOTE':metrics.D_ID_LIBC_system_NOTE}
@@ -420,6 +420,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 
 	def process_info(self):
 		self.clone_info()
+		self.fork_info()
 		self.execve_info()
 		self.procexit_info()
 
@@ -459,7 +460,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			data_list = self.handle_sysdig(output_list, metrics.D_ID_SYSCALL_ALL, metrics.D_ID_SYSCALL_ALL_NOTE)
 			self.action_info.extend(data_list)
 			ret_list = self.raw_syscall(data_list)
-			self.add_syscall_seq(ret_list)
+			# self.add_syscall_seq(ret_list)
 
 	def add_syscall_seq(self, sys_seq_list):
 		file_path = self.cfg.target_abs_path
@@ -535,6 +536,49 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			ret.append(node)
 		return ret
 
+	def handle_signal(self,output_list, act_id, act_id_note):
+		ret = []
+		for line in output_list:
+			parts = []
+			parts = line.split(' ',2)
+			str_pid = parts[0]
+			str_ts = parts[1].split()[0]
+			fun_parts = re.split('\)|\(', parts[2], 2)
+			if 1 >= len(fun_parts):
+				continue
+			elif fun_parts[0][0] == '<':
+				continue
+			str_src = fun_parts[0] + ' ' + str_pid
+			str_dst = fun_parts[1]  # arg
+
+			if -1 == str_src.find('kill'):
+				continue
+			#fun_parts[2] #ret
+			node = {}
+			if 3 >= len(parts):
+				#(str_ts,str_src,str_dst) = parts
+				ts = self.parse_time(str_ts)
+				node = {"ts":ts, 'src':str_src, 'dst':str_dst}
+			# elif 4 == len(parts):
+			# 	(str_ts,str_src,str_dst, str_comment) = parts
+			# 	ts = self.parse_time(str_ts)
+			# 	node = {"ts":ts, 'src':str_src, 'dst':str_dst, 'comment':str_comment}
+			node["ID"] = act_id
+			node["ID_NOTE"] = act_id_note
+			#self.log.debug("ts: %s, %s",ts,type(ts))
+			ret.append(node)
+		return ret
+
+	def fork_info(self):
+		plugin_path = os.path.join(self.cfg.sysdig_plugin_dir, "fork_info.lua")
+		if os.path.exists(plugin_path):
+			cmd = ['/usr/bin/sysdig', '-r' + self.info["sysdig_log_path"], '-c' + plugin_path,
+				   "%s %s" % (self.info["target_name"], str(self.info["target_pid"]))]
+			output = self.check_output_safe(cmd)
+			output_list = self.normalise(output.splitlines())
+			data_list = self.handle_sysdig(output_list, metrics.D_ID_LIBC_fork, metrics.D_ID_LIBC_fork_NOTE)
+			self.action_info.extend(data_list)
+
 	def clone_info(self):
 		plugin_path = os.path.join(self.cfg.sysdig_plugin_dir,"clone_info.lua")
 		if os.path.exists(plugin_path):
@@ -549,7 +593,22 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		self.file_access_info("read",metrics.D_ID_SYSCALL_READ, metrics.D_ID_SYSCALL_READ_NOTE)
 		self.file_access_info("write",metrics.D_ID_SYSCALL_WRITE, metrics.D_ID_SYSCALL_WRITE_NOTE)
 		self.file_close_info()
+		self.signal_kill_info()
 		self.pick_file_info()
+
+	def signal_kill_info(self):
+		trace_path = os.path.join(self.cfg.file_log_dir, self.cfg.main_target_md5 + ".strace")
+		if os.path.exists(trace_path):
+			try:
+				f = open(trace_path, "r")
+				output = f.read()
+				output_list = self.normalise(output.splitlines())
+				#handle_signal
+				data_list = self.handle_signal(output_list, metrics.D_ID_SYSCALL_KILL, metrics.D_ID_SYSCALL_KILL_NOTE)
+				self.action_info.extend(data_list)
+			except Exception as e:
+				self.log.error("get trace_file error: err: %s", str(e))
+
 
 	def pick_file_info(self):
 		lo_id = metrics.D_ID_SYSCALL_OPEN
@@ -561,6 +620,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			node = self.action_info[i]
 			if node["ID"] >=lo_id and node["ID"] <=hi_id:
 				info_str = node["dst"]
+				info_pid = node["src"].split('(')[1].split(',')[0].split('=')[1]
 				pos_start = info_str.find("path=")
 				pos_end = info_str.find(",")
 				if -1!=pos_start and -1!=pos_end:
@@ -572,7 +632,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			if os.path.exists(p) and os.path.getsize(p) < 1024*1024 and os.path.isfile(p) and not p.startswith('/dev/'):
 				self.log.info("path %s md5"%(p))
 				hash_md5 = base.BaseAnalyzer.get_md5_by_fname(p)
-			act = ["pick_file path=%s, hash_md5=%s"%(p,hash_md5), p, metrics.D_ID_FILE_PATH_INFO, metrics.D_ID_FILE_PATH_INFO_NOTE]
+			act = ["pick_file pid=%s, path=%s, hash_md5=%s"%(info_pid,p,hash_md5), p, metrics.D_ID_FILE_PATH_INFO, metrics.D_ID_FILE_PATH_INFO_NOTE]
 			self.add_action(act)
 
 	def file_access_info(self, rw_type, act_id, act_id_note):
@@ -602,33 +662,43 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			data_list = self.handle_sysdig(output_list, metrics.D_ID_NET_CONNECT, metrics.D_ID_NET_CONNECT_NOTE)
 			self.action_info.extend(data_list)
 
+	def sendto_info(self):
+		plugin_path = os.path.join(self.cfg.sysdig_plugin_dir,"sendto_info.lua")
+		if os.path.exists(plugin_path):
+			cmd = ['/usr/bin/sysdig','-r'+self.info["sysdig_log_path"], '-c'+plugin_path, "%s %s"%(self.info["target_name"], str(self.info["target_pid"]))]
+			output = self.check_output_safe(cmd)
+			output_list = self.normalise(output.splitlines())
+			data_list = self.handle_sysdig(output_list, metrics.D_ID_NET_SENDTO, metrics.D_ID_NET_SENDTO_NOTE)
+			self.action_info.extend(data_list)
+
 	def combain_src_dest(self, node):
-		node["dst"] = node["src"]+" -> "+node["dst"]
+		node["dst"] = node["dst"]    #node["src"]+" -> "+
 		return node
 
 	def handle_dns(self, output_list):
-		ret=[]#'daisy.ubuntu.com',
-		wlist = []
-				 # 'detectportal.firefox.com',
-				 # 'productsearch.ubuntu.com.localdomain',
-				 # 'current.cvd.clamav.net']
+		ret=[]
 		for line in output_list:
-			parts_src = line.split()
-			if parts_src[5] not in wlist:
-				ts = self.parse_time(parts_src[3])
-				node = {"ts": ts, "src": parts_src[6], "dst": parts_src[5]}
-				if '0' == parts_src[6]:
-					node["ID"] = metrics.D_ID_NET_DNS_QUERY
-					node["ID_NOTE"] = metrics.D_ID_NET_DNS_QUERY_NOTE
-				else:
-					node["ID"] = metrics.D_ID_NET_DNS_RESPONSE
-					node["ID_NOTE"] = metrics.D_ID_NET_DNS_RESPONSE_NOTE
-				ret.append(node)
+			parts = line.split()
+			src = parts[0]+' '+parts[1]
+			dst = parts[2]
+			response = parts[3]
+			time = parts[7]
+			ts = self.parse_time(time)
+			node = {"ts": ts, "src": src, "dst": dst}
+			if '0' == response:
+				node["ID"] = metrics.D_ID_NET_DNS_QUERY
+				node["ID_NOTE"] = metrics.D_ID_NET_DNS_QUERY_NOTE
+			else:
+				node["ID"] = metrics.D_ID_NET_DNS_RESPONSE
+				node["ID_NOTE"] = metrics.D_ID_NET_DNS_RESPONSE_NOTE
+			ret.append(node)
 		return ret
 
 	def dns_info(self):
 		#cmd = ['/usr/bin/tshark', '-n', '-ta', '-r'+ self.info["tcpdump_log_path"], '-2', '-R', 'dns.qry.name']
-		cmd = ['/usr/bin/tshark', '-n', '-ta', '-Y', 'dns', '-r' + self.info["tcpdump_log_path"], '-T', 'fields', '-e', 'frame.time', '-e', 'dns.qry.name', '-e', 'dns.flags.response']
+		#cmd = ['/usr/bin/tshark', '-n', '-ta', '-Y', 'dns', '-r' + self.info["tcpdump_log_path"], '-T', 'fields', '-e', 'frame.time', '-e', 'dns.qry.name', '-e', 'dns.flags.response']
+		cmd = ['/usr/bin/tshark', '-n', '-ta', '-Y', 'dns', '-r' + self.info["tcpdump_log_path"], '-T', 'fields', '-e',
+			   'ip.addr', '-e', 'udp.port', '-e', 'dns.qry.name', '-e', 'dns.flags.response', '-e', 'frame.time']
 		self.log.info("dns cmd: %s",str(cmd))
 		output = self.check_output_safe(cmd)
 		output_list = self.normalise(output.splitlines())
@@ -700,8 +770,15 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 					src_info = parts_src[2].strip()
 					dest_info = parts_dir[1].split()[0]
 					ts=self.parse_time(ts_info)
-					node = {"ts":ts, "src":src_info, "dst":dest_info}
 					if self.is_pure_protocal(parts_dir[1].strip(),"TCP"):  #dest_info parts_dir[1]
+
+						src_port = parts_dir[1].split()[-1]
+						dest_port = parts_dir[2].split()[0]
+						src_info += ':' + src_port
+						dest_info += ':' + dest_port
+
+						node = {"ts": ts, "src": src_info, "dst": dest_info}
+
 						node["ID"] = metrics.D_ID_NET_TCP
 						node["ID_NOTE"] = metrics.D_ID_NET_TCP_NOTE
 						node = self.combain_src_dest(node)
@@ -921,6 +998,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		self.https_info()
 		self.tcp_info()
 		self.udp_info()
+		self.sendto_info()
 		self.certificate_info()
 		if self.cfg.enable_inetsim:
 			self.kernel_log_net_info()
@@ -1095,7 +1173,10 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		else:
 			self.log.info("target exec timeout %d seconds", time_tick)
 			# I prefer kill -9 rather than SIGTERM
-			p.kill()
+			#p.kill()
+			p.terminate()
+			#os.killpg(p.pid, signal.SIGKILL)
+			#p.wait()
 			(stdoutdata,stderrdata) = p.communicate()
 			retcode = p.returncode
 			self.log.info("target was killed pid: %s, retcode: %d",str_pid,retcode)
@@ -1357,10 +1438,11 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 			self.log.debug("MagicLiteral: %s",MagicLiteral)
 			self.cfg.decided_trace_type = "strace"
 
-			if -1!=MagicLiteral.find("statically"):
-				self.cfg.decided_trace_type = "strace"
-			elif -1!=MagicLiteral.find("dynamically"):
-				self.cfg.decided_trace_type = "ltrace"
+			self.cfg.decided_trace_type = "strace"
+			# if -1!=MagicLiteral.find("statically"):
+			# 	self.cfg.decided_trace_type = "strace"
+			# elif -1!=MagicLiteral.find("dynamically"):
+			# 	self.cfg.decided_trace_type = "ltrace"
 		else:
 			self.cfg.decided_trace_type = self.cfg.trace_type
 		self.log.info("decided_trace_type: %s",self.cfg.decided_trace_type)
@@ -1425,7 +1507,7 @@ class DynamicAnalyzer(base.BaseAnalyzer):
 		log_file = os.path.join(self.cfg.file_log_dir,self.info["hash_md5"]+".strace")
 		self.info["strace_log_path"] = log_file
 		self.p_strace = subprocess.Popen(["/usr/bin/strace", "-f", "-s 32767", "-tt", "-y", "-o"+self.info["strace_log_path"], "-p"+str(self.info["target_pid"])], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-		self.log.info("strace starts, logfile:%s",self.info["strace_log_path"])
+		self.log.info("strace startstarget exec timeout 15 seconds, logfile:%s",self.info["strace_log_path"])
 
 	def stop_strace(self):
 		# first check whether ternimated.
